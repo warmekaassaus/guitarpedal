@@ -1,166 +1,142 @@
 /*
    Wemos D1 mini / ESP8266
-   EC11 rotary encoder interrupt test
+   Encoder + pedal test
 
-   ENC_A = D6 / GPIO12
-   ENC_B = D5 / GPIO14
-   ENC_SW = D7 / GPIO13
+   Encoder:
+     A  = D6 / GPIO12
+     B  = D5 / GPIO14
+     SW = D7 / GPIO13
+
+   Pedal (normally closed):
+     Pedal contact between D0 / GPIO16 and GND
+
+     Released = circuit CLOSED = LOW
+     Pressed  = circuit OPEN   = HIGH
 */
 
 #define ENC_A   D6
 #define ENC_B   D5
 #define ENC_SW  D7
+#define PEDAL   D0
 
 volatile int encoderDelta = 0;
-
 volatile uint8_t lastEncoderState = 0;
 
-long position = 0;
+int encoderPosition = 0;
 
+bool lastButtonState = HIGH;
+bool lastPedalState = LOW;
 
-// ------------------------------------------------------------
-// Encoder interrupt
-// ------------------------------------------------------------
+// Quadrature transition table
+const int8_t transitionTable[16] = {
+   0, -1,  1,  0,
+   1,  0,  0, -1,
+  -1,  0,  0,  1,
+   0,  1, -1,  0
+};
 
-void IRAM_ATTR encoderISR() {
-
+void ICACHE_RAM_ATTR encoderISR() {
   uint8_t a = digitalRead(ENC_A);
   uint8_t b = digitalRead(ENC_B);
 
-  uint8_t state = (a << 1) | b;
+  uint8_t currentState = (a << 1) | b;
+  uint8_t index = (lastEncoderState << 2) | currentState;
 
-  /*
-     Quadrature transition table.
+  encoderDelta += transitionTable[index];
 
-     Valid clockwise/counter-clockwise transitions
-     each produce one count.
-  */
-
-  uint8_t transition =
-    (lastEncoderState << 2) | state;
-
-  switch (transition) {
-
-    case 0b0001:
-    case 0b0111:
-    case 0b1110:
-    case 0b1000:
-      encoderDelta++;
-      break;
-
-    case 0b0010:
-    case 0b1011:
-    case 0b1101:
-    case 0b0100:
-      encoderDelta--;
-      break;
-  }
-
-  lastEncoderState = state;
+  lastEncoderState = currentState;
 }
 
-
-// ------------------------------------------------------------
-// Setup
-// ------------------------------------------------------------
-
 void setup() {
-
   Serial.begin(115200);
+  delay(200);
 
+  Serial.println();
+  Serial.println("==========================");
+  Serial.println(" ENCODER + PEDAL TEST");
+  Serial.println("==========================");
+
+  // Encoder
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_SW, INPUT_PULLUP);
 
-  // Read initial encoder state
-  uint8_t a = digitalRead(ENC_A);
-  uint8_t b = digitalRead(ENC_B);
+  // Pedal is normally CLOSED - this pin doesn't have internap pullup so added 10k external pullup to 3v3
+  pinMode(PEDAL, INPUT);
 
-  lastEncoderState = (a << 1) | b;
+  // Initialise encoder state
+  lastEncoderState =
+    (digitalRead(ENC_A) << 1) |
+     digitalRead(ENC_B);
 
-  /*
-     Interrupt on BOTH edges of A and B.
-  */
+  attachInterrupt(digitalPinToInterrupt(ENC_A), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC_B), encoderISR, CHANGE);
 
-  attachInterrupt(
-    digitalPinToInterrupt(ENC_A),
-    encoderISR,
-    CHANGE
-  );
-
-  attachInterrupt(
-    digitalPinToInterrupt(ENC_B),
-    encoderISR,
-    CHANGE
-  );
-
-  Serial.println();
-  Serial.println("======================");
-  Serial.println(" EC11 ENCODER TEST");
-  Serial.println("======================");
-  Serial.println();
-  Serial.println("ENC_A = D6");
-  Serial.println("ENC_B = D5");
-  Serial.println("ENC_SW = D7");
+  Serial.println("Ready.");
+  Serial.println("Rotate encoder, press encoder button, or press pedal.");
   Serial.println();
 }
 
-
-// ------------------------------------------------------------
-// Main loop
-// ------------------------------------------------------------
-
 void loop() {
 
-  // ----------------------------------------------------------
+  // -------------------------
   // Encoder
-  // ----------------------------------------------------------
-
-  int delta;
+  // -------------------------
 
   noInterrupts();
-
-  delta = encoderDelta;
+  int delta = encoderDelta;
   encoderDelta = 0;
-
   interrupts();
 
-
   if (delta != 0) {
+    encoderPosition += delta;
 
-    position += delta;
-
-    Serial.print("Position: ");
-    Serial.print(position);
-
-    Serial.print("   Delta: ");
-    Serial.println(delta);
+    Serial.print("Encoder position: ");
+    Serial.println(encoderPosition);
   }
 
 
-  // ----------------------------------------------------------
-  // Encoder push button
-  // ----------------------------------------------------------
+  // -------------------------
+  // Encoder button
+  // -------------------------
 
-  static bool lastButton = HIGH;
+  bool buttonState = digitalRead(ENC_SW);
 
-  bool button = digitalRead(ENC_SW);
+  if (buttonState != lastButtonState) {
+    delay(10);  // simple debounce
 
-  if (button != lastButton) {
+    buttonState = digitalRead(ENC_SW);
 
-    delay(5);
+    if (buttonState != lastButtonState) {
+      lastButtonState = buttonState;
 
-    button = digitalRead(ENC_SW);
-
-    if (button != lastButton) {
-
-      lastButton = button;
-
-      if (button == LOW) {
+      if (buttonState == LOW) {
         Serial.println("Encoder button: PRESSED");
-      }
-      else {
+      } else {
         Serial.println("Encoder button: RELEASED");
+      }
+    }
+  }
+
+
+  // -------------------------
+  // Pedal
+  // -------------------------
+
+  bool pedalState = digitalRead(PEDAL);
+
+  if (pedalState != lastPedalState) {
+    delay(10);  // simple debounce
+
+    pedalState = digitalRead(PEDAL);
+
+    if (pedalState != lastPedalState) {
+      lastPedalState = pedalState;
+
+      if (pedalState == HIGH) {
+        Serial.println("PEDAL: PRESSED");
+      } else {
+        Serial.println("PEDAL: RELEASED");
       }
     }
   }
