@@ -70,7 +70,7 @@
 
 #define MIN_DURATION_MIN     5
 #define MAX_DURATION_MIN     240
-#define DURATION_STEP_MIN    5
+#define DURATION_STEP_MIN    1
 
 #define PEDAL_HOLD_MS        2000
 
