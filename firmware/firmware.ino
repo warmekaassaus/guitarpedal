@@ -160,6 +160,9 @@ bool encoderUnlocked = false;
 bool showUnlockPrompt = false;
 unsigned long unlockPromptStarted = 0;
 const unsigned long UNLOCK_PROMPT_MS = 2000;
+bool showPedalLockPrompt = false;
+unsigned long pedalLockPromptStarted = 0;
+bool pedalMustRelease = false;
 
 
 // Valid quadrature transitions
@@ -437,6 +440,35 @@ void handleEncoderButton() {
 
 void handlePedal() {
 
+  bool reading = (digitalRead(PEDAL) == HIGH);
+
+  // Pedal actions are disabled while duration setting is unlocked.
+  if (encoderUnlocked) {
+    if (reading) {
+      showPedalLockPrompt = true;
+      pedalLockPromptStarted = millis();
+    }
+
+    pedalMustRelease = reading;
+    lastPedalReading = reading;
+    pedalPressed = false;
+    pedalHoldHandled = false;
+    return;
+  }
+
+  // Require a release before accepting pedal input after it was held
+  // while unlocked, so locking cannot turn that into a pedal action.
+  if (pedalMustRelease) {
+    lastPedalReading = reading;
+    pedalPressed = false;
+    pedalHoldHandled = false;
+
+    if (!reading)
+      pedalMustRelease = false;
+
+    return;
+  }
+
   /*
      Roland DP-2 is normally CLOSED.
 
@@ -446,10 +478,6 @@ void handlePedal() {
      Released = LOW
      Pressed  = HIGH
   */
-
-  bool reading =
-    (digitalRead(PEDAL) == HIGH);
-
 
   // Detect change
   if (reading != lastPedalReading) {
@@ -556,6 +584,15 @@ void formatTime(
 // ============================================================
 
 void drawStatus(const char *defaultStatus) {
+  if (showPedalLockPrompt) {
+    if (millis() - pedalLockPromptStarted < UNLOCK_PROMPT_MS) {
+      oled.drawStr(0, 9, "PRESS KNOB TO LOCK");
+      return;
+    }
+
+    showPedalLockPrompt = false;
+  }
+
   if (showUnlockPrompt) {
     if (millis() - unlockPromptStarted < UNLOCK_PROMPT_MS) {
       oled.drawStr(0, 9, "PRESS KNOB TO UNLOCK");
