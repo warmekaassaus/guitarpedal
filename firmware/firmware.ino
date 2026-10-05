@@ -691,6 +691,21 @@ void setAllLEDs(uint32_t colour) {
 }
 
 
+void pulseLEDs(uint8_t red, uint8_t green, uint8_t blue) {
+  const unsigned long PULSE_PERIOD_MS = 3000;
+
+  float phase = (millis() % PULSE_PERIOD_MS) * TWO_PI / PULSE_PERIOD_MS;
+  float pulse = (sinf(phase - 1.5707963f) + 1.0f) * 0.5f;
+  uint8_t level = (uint8_t)(pulse * 255.0f + 0.5f);
+
+  uint8_t pulsedRed = ((uint16_t)red * level) / 255;
+  uint8_t pulsedGreen = ((uint16_t)green * level) / 255;
+  uint8_t pulsedBlue = ((uint16_t)blue * level) / 255;
+
+  setAllLEDs(strip.Color(pulsedRed, pulsedGreen, pulsedBlue));
+}
+
+
 void updateLEDs() {
 
   // Three blue flashes confirm that a long hold reset the timer.
@@ -709,10 +724,14 @@ void updateLEDs() {
     }
   }
 
+  // Unlocked state breathes white, up to RGB 100,100,100.
+  if (encoderUnlocked) {
+    pulseLEDs(100, 100, 100);
+    return;
+  }
+
   if (pedalPressed) {
-    setAllLEDs(
-      strip.Color(100, 100, 100)
-      );
+    setAllLEDs(strip.Color(100, 100, 100));
     return;
   }
 
@@ -726,10 +745,8 @@ void updateLEDs() {
 
   else if (timerState == TIMER_PAUSED) {
 
-    // Amber / dim
-    setAllLEDs(
-      strip.Color(100, 40, 0)
-    );
+    // Breathe the existing paused amber color.
+    pulseLEDs(100, 40, 0);
   }
 
 
