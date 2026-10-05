@@ -31,7 +31,7 @@
 
    Timer:
      Encoder changes duration in 5-minute steps
-     Encoder button = toggle duration lock
+     Encoder button = reset timer
      Pedal:
        stopped -> start
        running -> pause
@@ -68,7 +68,7 @@
 
 #define DEFAULT_DURATION_MIN 60
 
-#define MIN_DURATION_MIN     5
+#define MIN_DURATION_MIN     1
 #define MAX_DURATION_MIN     240
 #define DURATION_STEP_MIN    1
 
@@ -117,6 +117,9 @@ TimerState timerState = TIMER_STOPPED;
 // Programmed duration
 uint16_t programmedMinutes = DEFAULT_DURATION_MIN;
 uint16_t lastSavedMinutes = DEFAULT_DURATION_MIN;
+bool settingsSavePending = false;
+unsigned long encoderLastChangedAt = 0;
+const unsigned long EEPROM_SAVE_DELAY_MS = 1000;
 
 // Current countdown
 uint32_t remainingMs = 0;
@@ -156,15 +159,6 @@ int encoderPosition = 0;
 
 // Accumulate four quadrature transitions into one detent
 int encoderTransitionAccumulator = 0;
-bool encoderUnlocked = false;
-bool showUnlockPrompt = false;
-unsigned long unlockPromptStarted = 0;
-const unsigned long UNLOCK_PROMPT_MS = 2000;
-bool showPedalLockPrompt = false;
-unsigned long pedalLockPromptStarted = 0;
-bool showToggleLockPrompt = false;
-unsigned long toggleLockPromptStarted = 0;
-bool pedalMustRelease = false;
 
 
 // Valid quadrature transitions
@@ -242,6 +236,27 @@ void saveSettings() {
   EEPROM.commit();
 
   lastSavedMinutes = programmedMinutes;
+  settingsSavePending = false;
+}
+
+
+void scheduleSettingsSave() {
+  settingsSavePending = (programmedMinutes != lastSavedMinutes);
+  encoderLastChangedAt = millis();
+}
+
+
+void handleDeferredSettingsSave() {
+  if (!settingsSavePending)
+    return;
+
+  if (programmedMinutes == lastSavedMinutes) {
+    settingsSavePending = false;
+    return;
+  }
+
+  if (millis() - encoderLastChangedAt >= EEPROM_SAVE_DELAY_MS)
+    saveSettings();
 }
 
 
@@ -357,14 +372,6 @@ void handleEncoder() {
     return;
 
 
-  // Ignore encoder rotation while locked, and show how to unlock.
-  if (!encoderUnlocked) {
-    encoderTransitionAccumulator = 0;
-    showUnlockPrompt = true;
-    unlockPromptStarted = millis();
-    return;
-  }
-
   // Only allow duration adjustment while stopped
   if (timerState != TIMER_STOPPED) {
     encoderTransitionAccumulator = 0;
@@ -378,6 +385,7 @@ void handleEncoder() {
   // Four transitions = one physical detent
   while (encoderTransitionAccumulator >= 4) {
 
+    uint16_t previousMinutes = programmedMinutes;
     programmedMinutes += DURATION_STEP_MIN;
 
     encoderTransitionAccumulator -= 4;
@@ -385,16 +393,24 @@ void handleEncoder() {
     if (programmedMinutes > MAX_DURATION_MIN)
       programmedMinutes = MAX_DURATION_MIN;
 
+    if (programmedMinutes != previousMinutes)
+      scheduleSettingsSave();
+
     resetTimer();
   }
 
 
   while (encoderTransitionAccumulator <= -4) {
 
+    uint16_t previousMinutes = programmedMinutes;
+
     if (programmedMinutes > MIN_DURATION_MIN)
       programmedMinutes -= DURATION_STEP_MIN;
 
     encoderTransitionAccumulator += 4;
+
+    if (programmedMinutes != previousMinutes)
+      scheduleSettingsSave();
 
     resetTimer();
   }
@@ -421,22 +437,11 @@ void handleEncoderButton() {
 
       lastEncoderButton = state;
 
-      if (state == LOW) {
+      if (state == LOW)
+        resetTimer();
 
-        if (timerState != TIMER_STOPPED) {
-          showToggleLockPrompt = true;
-          toggleLockPromptStarted = millis();
-          return;
-        }
-
-        // Save a changed duration when locking the setting controls.
-        if (encoderUnlocked && programmedMinutes != lastSavedMinutes)
-          saveSettings();
-
-        encoderUnlocked = !encoderUnlocked;
-        encoderTransitionAccumulator = 0;
-        showUnlockPrompt = false;
-      }
+        resetFlashStarted = millis();
+        resetFlashActive = true;
     }
   }
 }
@@ -449,33 +454,6 @@ void handleEncoderButton() {
 void handlePedal() {
 
   bool reading = (digitalRead(PEDAL) == HIGH);
-
-  // Pedal actions are disabled while duration setting is unlocked.
-  if (encoderUnlocked) {
-    if (reading) {
-      showPedalLockPrompt = true;
-      pedalLockPromptStarted = millis();
-    }
-
-    pedalMustRelease = reading;
-    lastPedalReading = reading;
-    pedalPressed = false;
-    pedalHoldHandled = false;
-    return;
-  }
-
-  // Require a release before accepting pedal input after it was held
-  // while unlocked, so locking cannot turn that into a pedal action.
-  if (pedalMustRelease) {
-    lastPedalReading = reading;
-    pedalPressed = false;
-    pedalHoldHandled = false;
-
-    if (!reading)
-      pedalMustRelease = false;
-
-    return;
-  }
 
   /*
      Roland DP-2 is normally CLOSED.
@@ -521,8 +499,12 @@ void handlePedal() {
         pedalPressed = false;
 
         if (!pedalHoldHandled) {
+          if (getOvertimeMs() != 0) {
+            resetTimer();
 
-          if (timerState == TIMER_STOPPED) {
+            resetFlashStarted = millis();
+            resetFlashActive = true;
+          } else if (timerState == TIMER_STOPPED) {
 
             startTimer();
 
@@ -591,41 +573,6 @@ void formatTime(
 // OLED
 // ============================================================
 
-void drawStatus(const char *defaultStatus) {
-  if (showToggleLockPrompt) {
-    if (millis() - toggleLockPromptStarted < UNLOCK_PROMPT_MS) {
-      oled.drawStr(0, 9, "ONLY WHEN STOPPED");
-      return;
-    }
-
-    showToggleLockPrompt = false;
-  }
-
-  if (showPedalLockPrompt) {
-    if (millis() - pedalLockPromptStarted < UNLOCK_PROMPT_MS) {
-      oled.drawStr(0, 9, "PRESS KNOB TO LOCK");
-      return;
-    }
-
-    showPedalLockPrompt = false;
-  }
-
-  if (showUnlockPrompt) {
-    if (millis() - unlockPromptStarted < UNLOCK_PROMPT_MS) {
-      oled.drawStr(0, 9, "PRESS KNOB TO UNLOCK");
-      return;
-    }
-
-    showUnlockPrompt = false;
-  }
-
-  if (encoderUnlocked)
-    oled.drawStr(0, 9, "UNLOCKED");
-  else
-    oled.drawStr(0, 9, defaultStatus);
-}
-
-
 void updateDisplay() {
 
   char timeString[16];
@@ -641,9 +588,9 @@ void updateDisplay() {
 
     oled.setFont(u8g2_font_6x10_tf);
 
-    drawStatus("LOCKED");
+    oled.drawStr(0, 22, "SET");
 
-    oled.setFont(u8g2_font_logisoso20_tf);
+    oled.setFont(u8g2_font_logisoso30_tn);
 
     formatTime(
       remainingMs,
@@ -651,7 +598,7 @@ void updateDisplay() {
       sizeof(timeString)
     );
 
-    oled.drawStr(32, 25, timeString);
+    oled.drawStr(20, 32, timeString);
   }
 
 
@@ -664,11 +611,7 @@ void updateDisplay() {
     remainingMs > 0
   ) {
 
-    oled.setFont(u8g2_font_6x10_tf);
-
-    drawStatus("TIME");
-
-    oled.setFont(u8g2_font_logisoso20_tf);
+    oled.setFont(u8g2_font_logisoso30_tn);
 
     formatTime(
       remainingMs,
@@ -676,7 +619,7 @@ void updateDisplay() {
       sizeof(timeString)
     );
 
-    oled.drawStr(32, 25, timeString);
+    oled.drawStr(20, 32, timeString);
   }
 
 
@@ -686,11 +629,11 @@ void updateDisplay() {
 
   else if (timerState == TIMER_PAUSED) {
 
-    oled.setFont(u8g2_font_6x10_tf);
+    // Pause symbol: two filled vertical bars.
+    oled.drawBox(5, 13, 3, 10);
+    oled.drawBox(11, 13, 3, 10);
 
-    drawStatus("PAUSED");
-
-    oled.setFont(u8g2_font_logisoso20_tf);
+    oled.setFont(u8g2_font_logisoso30_tn);
 
     formatTime(
       remainingMs,
@@ -698,7 +641,7 @@ void updateDisplay() {
       sizeof(timeString)
     );
 
-    oled.drawStr(32, 25, timeString);
+    oled.drawStr(20, 32, timeString);
   }
 
 
@@ -710,12 +653,12 @@ void updateDisplay() {
 
     uint32_t overtime =
       getOvertimeMs();
+    
+    // Plus symbol: two overlapping rectangles
+    oled.drawBox(5, 16, 11, 3); // horizontal
+    oled.drawBox(9, 12, 3, 11); // vertical
 
-    oled.setFont(u8g2_font_6x10_tf);
-
-    drawStatus("OVERTIME");
-
-    oled.setFont(u8g2_font_logisoso20_tf);
+    oled.setFont(u8g2_font_logisoso30_tn);
 
     formatTime(
       overtime,
@@ -723,7 +666,8 @@ void updateDisplay() {
       sizeof(timeString)
     );
 
-    oled.drawStr(32, 25, timeString);
+
+    oled.drawStr(20, 32, timeString);
   }
 
 
@@ -748,7 +692,7 @@ void setAllLEDs(uint32_t colour) {
 void pulseLEDs(uint8_t red, uint8_t green, uint8_t blue) {
   const unsigned long PULSE_PERIOD_MS = 3000;
 
-  float phase = (millis() % PULSE_PERIOD_MS) * TWO_PI / PULSE_PERIOD_MS;
+  float phase = (millis() % PULSE_PERIOD_MS) * 6.2831853f / PULSE_PERIOD_MS;
   float pulse = (sinf(phase - 1.5707963f) + 1.0f) * 0.5f;
   uint8_t level = (uint8_t)(pulse * 255.0f + 0.5f);
 
@@ -776,12 +720,6 @@ void updateLEDs() {
       );
       return;
     }
-  }
-
-  // Unlocked state breathes white, up to RGB 100,100,100.
-  if (encoderUnlocked) {
-    pulseLEDs(100, 100, 100);
-    return;
   }
 
   if (pedalPressed) {
@@ -815,10 +753,8 @@ void updateLEDs() {
 
   else {
 
-    // Red = overtime
-    setAllLEDs(
-      strip.Color(180, 0, 0)
-    );
+    // Pulsing red = overtime
+    pulseLEDs(180, 0, 0);
   }
 }
 
@@ -914,6 +850,10 @@ void setup() {
   // --------------------------
 
   resetTimer();
+  
+  resetFlashStarted = millis();
+  resetFlashActive = true;
+  pedalHoldHandled = true;
 
 
   Serial.print("Duration: ");
@@ -939,9 +879,10 @@ void loop() {
 
   // Encoder
   handleEncoder();
+  handleDeferredSettingsSave();
 
 
-  // Encoder pushbutton toggles duration-setting lock
+  // Encoder pushbutton
   handleEncoderButton();
 
 
