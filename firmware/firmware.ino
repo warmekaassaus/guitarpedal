@@ -647,6 +647,13 @@ void setAllLEDs(uint32_t colour) {
 
 void updateLEDs() {
 
+  if (pedalPressed) {
+    setAllLEDs(
+      strip.Color(100, 100, 100)
+      );
+    return;
+  }
+
   if (timerState == TIMER_STOPPED) {
 
     setAllLEDs(
@@ -818,8 +825,8 @@ void loop() {
   }
 
 
-  // LEDs ~10 Hz
-  if (millis() - lastLEDUpdate >= 100) {
+  // LEDs ~50 Hz
+  if (millis() - lastLEDUpdate >= 20) {
 
     lastLEDUpdate = millis();
 
