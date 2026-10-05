@@ -72,7 +72,7 @@
 #define MAX_DURATION_MIN     240
 #define DURATION_STEP_MIN    1
 
-#define PEDAL_HOLD_MS        2000
+#define PEDAL_HOLD_MS        1000
 
 #define LED_BRIGHTNESS       40
 
