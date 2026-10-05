@@ -31,7 +31,7 @@
 
    Timer:
      Encoder changes duration in 5-minute steps
-     Encoder button = reset
+     Encoder button = toggle duration lock
      Pedal:
        stopped -> start
        running -> pause
@@ -117,9 +117,6 @@ TimerState timerState = TIMER_STOPPED;
 // Programmed duration
 uint16_t programmedMinutes = DEFAULT_DURATION_MIN;
 uint16_t lastSavedMinutes = DEFAULT_DURATION_MIN;
-bool settingsSavePending = false;
-unsigned long encoderLastChangedAt = 0;
-const unsigned long EEPROM_SAVE_DELAY_MS = 1000;
 
 // Current countdown
 uint32_t remainingMs = 0;
@@ -159,6 +156,10 @@ int encoderPosition = 0;
 
 // Accumulate four quadrature transitions into one detent
 int encoderTransitionAccumulator = 0;
+bool encoderUnlocked = false;
+bool showUnlockPrompt = false;
+unsigned long unlockPromptStarted = 0;
+const unsigned long UNLOCK_PROMPT_MS = 2000;
 
 
 // Valid quadrature transitions
@@ -220,10 +221,8 @@ void loadSettings() {
     programmedMinutes = DEFAULT_DURATION_MIN;
   }
 
-  // Track the value currently represented in EEPROM, or the default
-  // that should be considered saved when EEPROM contents are invalid.
+  // Track the value currently represented in EEPROM.
   lastSavedMinutes = programmedMinutes;
-  settingsSavePending = false;
 }
 
 
@@ -238,28 +237,6 @@ void saveSettings() {
   EEPROM.commit();
 
   lastSavedMinutes = programmedMinutes;
-  settingsSavePending = false;
-}
-
-
-void scheduleSettingsSave() {
-  settingsSavePending = (programmedMinutes != lastSavedMinutes);
-  encoderLastChangedAt = millis();
-}
-
-
-void handleDeferredSettingsSave() {
-  if (!settingsSavePending)
-    return;
-
-  // The encoder may have returned to the previously saved value.
-  if (programmedMinutes == lastSavedMinutes) {
-    settingsSavePending = false;
-    return;
-  }
-
-  if (millis() - encoderLastChangedAt >= EEPROM_SAVE_DELAY_MS)
-    saveSettings();
 }
 
 
@@ -375,9 +352,19 @@ void handleEncoder() {
     return;
 
 
-  // Only allow duration adjustment while stopped
-  if (timerState != TIMER_STOPPED)
+  // Ignore encoder rotation while locked, and show how to unlock.
+  if (!encoderUnlocked) {
+    encoderTransitionAccumulator = 0;
+    showUnlockPrompt = true;
+    unlockPromptStarted = millis();
     return;
+  }
+
+  // Only allow duration adjustment while stopped
+  if (timerState != TIMER_STOPPED) {
+    encoderTransitionAccumulator = 0;
+    return;
+  }
 
 
   encoderTransitionAccumulator += delta;
@@ -386,7 +373,6 @@ void handleEncoder() {
   // Four transitions = one physical detent
   while (encoderTransitionAccumulator >= 4) {
 
-    uint16_t previousMinutes = programmedMinutes;
     programmedMinutes += DURATION_STEP_MIN;
 
     encoderTransitionAccumulator -= 4;
@@ -394,24 +380,16 @@ void handleEncoder() {
     if (programmedMinutes > MAX_DURATION_MIN)
       programmedMinutes = MAX_DURATION_MIN;
 
-    if (programmedMinutes != previousMinutes)
-      scheduleSettingsSave();
-
     resetTimer();
   }
 
 
   while (encoderTransitionAccumulator <= -4) {
 
-    uint16_t previousMinutes = programmedMinutes;
-
     if (programmedMinutes > MIN_DURATION_MIN)
       programmedMinutes -= DURATION_STEP_MIN;
 
     encoderTransitionAccumulator += 4;
-
-    if (programmedMinutes != previousMinutes)
-      scheduleSettingsSave();
 
     resetTimer();
   }
@@ -440,8 +418,13 @@ void handleEncoderButton() {
 
       if (state == LOW) {
 
-        // Reset timer
-        resetTimer();
+        // Save a changed duration when locking the setting controls.
+        if (encoderUnlocked && programmedMinutes != lastSavedMinutes)
+          saveSettings();
+
+        encoderUnlocked = !encoderUnlocked;
+        encoderTransitionAccumulator = 0;
+        showUnlockPrompt = false;
       }
     }
   }
@@ -572,6 +555,23 @@ void formatTime(
 // OLED
 // ============================================================
 
+void drawStatus(const char *defaultStatus) {
+  if (showUnlockPrompt) {
+    if (millis() - unlockPromptStarted < UNLOCK_PROMPT_MS) {
+      oled.drawStr(0, 9, "PRESS KNOB TO UNLOCK");
+      return;
+    }
+
+    showUnlockPrompt = false;
+  }
+
+  if (encoderUnlocked)
+    oled.drawStr(0, 9, "UNLOCKED");
+  else
+    oled.drawStr(0, 9, defaultStatus);
+}
+
+
 void updateDisplay() {
 
   char timeString[16];
@@ -587,7 +587,7 @@ void updateDisplay() {
 
     oled.setFont(u8g2_font_6x10_tf);
 
-    oled.drawStr(0, 9, "SET");
+    drawStatus("LOCKED");
 
     oled.setFont(u8g2_font_logisoso20_tf);
 
@@ -612,7 +612,7 @@ void updateDisplay() {
 
     oled.setFont(u8g2_font_6x10_tf);
 
-    oled.drawStr(0, 9, "TIME");
+    drawStatus("TIME");
 
     oled.setFont(u8g2_font_logisoso20_tf);
 
@@ -634,7 +634,7 @@ void updateDisplay() {
 
     oled.setFont(u8g2_font_6x10_tf);
 
-    oled.drawStr(0, 9, "PAUSED");
+    drawStatus("PAUSED");
 
     oled.setFont(u8g2_font_logisoso20_tf);
 
@@ -659,7 +659,7 @@ void updateDisplay() {
 
     oled.setFont(u8g2_font_6x10_tf);
 
-    oled.drawStr(0, 9, "OVERTIME");
+    drawStatus("OVERTIME");
 
     oled.setFont(u8g2_font_logisoso20_tf);
 
@@ -868,10 +868,9 @@ void loop() {
 
   // Encoder
   handleEncoder();
-  handleDeferredSettingsSave();
 
 
-  // Encoder pushbutton
+  // Encoder pushbutton toggles duration-setting lock
   handleEncoderButton();
 
 
