@@ -162,6 +162,8 @@ unsigned long unlockPromptStarted = 0;
 const unsigned long UNLOCK_PROMPT_MS = 2000;
 bool showPedalLockPrompt = false;
 unsigned long pedalLockPromptStarted = 0;
+bool showToggleLockPrompt = false;
+unsigned long toggleLockPromptStarted = 0;
 bool pedalMustRelease = false;
 
 
@@ -421,6 +423,12 @@ void handleEncoderButton() {
 
       if (state == LOW) {
 
+        if (timerState != TIMER_STOPPED) {
+          showToggleLockPrompt = true;
+          toggleLockPromptStarted = millis();
+          return;
+        }
+
         // Save a changed duration when locking the setting controls.
         if (encoderUnlocked && programmedMinutes != lastSavedMinutes)
           saveSettings();
@@ -584,6 +592,15 @@ void formatTime(
 // ============================================================
 
 void drawStatus(const char *defaultStatus) {
+  if (showToggleLockPrompt) {
+    if (millis() - toggleLockPromptStarted < UNLOCK_PROMPT_MS) {
+      oled.drawStr(0, 9, "ONLY WHEN STOPPED");
+      return;
+    }
+
+    showToggleLockPrompt = false;
+  }
+
   if (showPedalLockPrompt) {
     if (millis() - pedalLockPromptStarted < UNLOCK_PROMPT_MS) {
       oled.drawStr(0, 9, "PRESS KNOB TO LOCK");
