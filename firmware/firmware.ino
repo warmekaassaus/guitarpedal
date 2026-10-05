@@ -137,6 +137,12 @@ bool lastPedalReading = false;
 unsigned long pedalPressStarted = 0;
 bool pedalHoldHandled = false;
 
+// Reset confirmation flash (three blue flashes)
+bool resetFlashActive = false;
+unsigned long resetFlashStarted = 0;
+const unsigned long RESET_FLASH_INTERVAL_MS = 150;
+const unsigned long RESET_FLASH_DURATION_MS = 900;
+
 
 // ============================================================
 // ENCODER
@@ -489,6 +495,8 @@ void handlePedal() {
 
     resetTimer();
 
+    resetFlashStarted = millis();
+    resetFlashActive = true;
     pedalHoldHandled = true;
   }
 }
@@ -646,6 +654,22 @@ void setAllLEDs(uint32_t colour) {
 
 
 void updateLEDs() {
+
+  // Three blue flashes confirm that a long hold reset the timer.
+  if (resetFlashActive) {
+
+    unsigned long elapsed = millis() - resetFlashStarted;
+
+    if (elapsed >= RESET_FLASH_DURATION_MS) {
+      resetFlashActive = false;
+    } else {
+      bool flashOn = ((elapsed / RESET_FLASH_INTERVAL_MS) % 2) == 0;
+      setAllLEDs(
+        flashOn ? strip.Color(0, 0, 180) : strip.Color(0, 0, 0)
+      );
+      return;
+    }
+  }
 
   if (pedalPressed) {
     setAllLEDs(
