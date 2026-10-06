@@ -684,9 +684,9 @@ void updateDisplay() {
 
     // 0..255 mapped to a 0..124 pixel bar.
     const int barX = 2;
-    const int barY = 15;
+    const int barY = 12;
     const int barW = 124;
-    const int barH = 12;
+    const int barH = 10;
     int fillW = ((int)ledBrightness * (barW - 2)) / 255;
 
     oled.drawFrame(barX, barY, barW, barH);
@@ -704,7 +704,6 @@ void updateDisplay() {
 
     oled.setFont(u8g2_font_6x10_tf);
     oled.drawStr(0, 32, brightnessString);
-    oled.drawStr(82, 32, "CLICK");
 
     oled.sendBuffer();
     return;
