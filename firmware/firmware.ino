@@ -852,14 +852,14 @@ void updateLEDs() {
     } else {
       bool flashOn = ((elapsed / RESET_FLASH_INTERVAL_MS) % 2) == 0;
       setAllLEDs(
-        flashOn ? strip.Color(0, 0, 180) : strip.Color(0, 0, 0)
+        flashOn ? strip.Color(0, 0, 255) : strip.Color(0, 0, 0)
       );
       return;
     }
   }
 
   if (pedalPressed) {
-    setAllLEDs(strip.Color(100, 100, 100));
+    setAllLEDs(strip.Color(255, 255, 255));
     return;
   }
 
@@ -874,7 +874,7 @@ void updateLEDs() {
   else if (timerState == TIMER_PAUSED) {
 
     // Breathe the existing paused amber color.
-    pulseLEDs(100, 40, 0);
+    pulseLEDs(255, 100, 0);
   }
 
 
@@ -882,7 +882,7 @@ void updateLEDs() {
 
     // Green
     setAllLEDs(
-      strip.Color(0, 150, 0)
+      strip.Color(0, 255, 0)
     );
   }
 
@@ -890,7 +890,7 @@ void updateLEDs() {
   else {
 
     // Pulsing red = overtime
-    pulseLEDs(180, 0, 0);
+    pulseLEDs(255, 0, 0);
   }
 }
 
