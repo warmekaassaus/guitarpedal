@@ -515,15 +515,17 @@ void handleEncoderButton() {
         encoderPressStarted = millis();
         encoderHoldHandled = false;
       } else {
-        // A normal click exits brightness mode. Otherwise it keeps
-        // the original "reset timer" button behavior.
-        if (brightnessScreenActive) {
-          brightnessScreenActive = false;
-          encoderTransitionAccumulator = 0;
-        } else if (!encoderHoldHandled) {
-          resetTimer();
-          resetFlashStarted = millis();
-          resetFlashActive = true;
+        // The release after a long press only completes the hold that
+        // entered brightness mode; a later short click exits it.
+        if (!encoderHoldHandled) {
+          if (brightnessScreenActive) {
+            brightnessScreenActive = false;
+            encoderTransitionAccumulator = 0;
+          } else {
+            resetTimer();
+            resetFlashStarted = millis();
+            resetFlashActive = true;
+          }
         }
       }
     }
