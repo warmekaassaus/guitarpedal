@@ -32,12 +32,13 @@
    Timer:
      Encoder changes duration in 5-minute steps
      Encoder button = reset timer
-     Pedal:
-       stopped -> start
-       running -> pause
-       paused -> resume
-     Pedal held 2 sec = reset
-     After zero = overtime
+
+    Pedal:
+      stopped -> start
+      running -> pause
+      paused -> resume
+      Pedal held 2 sec = reset
+      After zero = overtime
 
 */
 
@@ -73,11 +74,17 @@
 #define DURATION_STEP_MIN    1
 
 #define PEDAL_HOLD_MS        1000
+#define KNOB_HOLD_MS         1000
 
-#define LED_BRIGHTNESS       40
+#define DEFAULT_LED_BRIGHTNESS 40
+#define MIN_LED_BRIGHTNESS     0
+#define MAX_LED_BRIGHTNESS     255
+#define LED_BRIGHTNESS_STEP    5
 
 #define EEPROM_SIZE          16
-#define EEPROM_MAGIC         0x47
+
+#define EEPROM_MAGIC           0x47
+#define BRIGHTNESS_MAGIC       0xB6
 
 
 // ============================================================
@@ -160,6 +167,17 @@ int encoderPosition = 0;
 // Accumulate four quadrature transitions into one detent
 int encoderTransitionAccumulator = 0;
 
+// Brightness adjustment screen
+bool brightnessScreenActive = false;
+bool encoderHoldHandled = false;
+unsigned long encoderPressStarted = 0;
+
+// LED brightness settings
+uint8_t ledBrightness = DEFAULT_LED_BRIGHTNESS;
+uint8_t lastSavedBrightness = DEFAULT_LED_BRIGHTNESS;
+bool brightnessSavePending = false;
+unsigned long brightnessLastChangedAt = 0;
+
 
 // Valid quadrature transitions
 const int8_t transitionTable[16] = {
@@ -198,6 +216,8 @@ void ICACHE_RAM_ATTR encoderISR() {
 struct Settings {
   uint8_t magic;
   uint16_t durationMinutes;
+  uint8_t brightness;
+  uint8_t brightnessMagic;
 };
 
 
@@ -220,8 +240,20 @@ void loadSettings() {
     programmedMinutes = DEFAULT_DURATION_MIN;
   }
 
-  // Track the value currently represented in EEPROM.
+  // Brightness was added after the original firmware. If no valid
+  // brightness value exists, keep the original default.
+  if (settings.brightnessMagic == BRIGHTNESS_MAGIC) {
+    ledBrightness = constrain(
+      settings.brightness,
+      MIN_LED_BRIGHTNESS,
+      MAX_LED_BRIGHTNESS
+    );
+  } else {
+    ledBrightness = DEFAULT_LED_BRIGHTNESS;
+  }
+
   lastSavedMinutes = programmedMinutes;
+  lastSavedBrightness = ledBrightness;
 }
 
 
@@ -231,12 +263,16 @@ void saveSettings() {
 
   settings.magic = EEPROM_MAGIC;
   settings.durationMinutes = programmedMinutes;
+  settings.brightness = ledBrightness;
+  settings.brightnessMagic = BRIGHTNESS_MAGIC;
 
   EEPROM.put(0, settings);
   EEPROM.commit();
 
   lastSavedMinutes = programmedMinutes;
+  lastSavedBrightness = ledBrightness;
   settingsSavePending = false;
+  brightnessSavePending = false;
 }
 
 
@@ -245,18 +281,27 @@ void scheduleSettingsSave() {
   encoderLastChangedAt = millis();
 }
 
+void scheduleBrightnessSave() {
+  brightnessSavePending = (ledBrightness != lastSavedBrightness);
+  brightnessLastChangedAt = millis();
+}
 
 void handleDeferredSettingsSave() {
-  if (!settingsSavePending)
-    return;
-
-  if (programmedMinutes == lastSavedMinutes) {
-    settingsSavePending = false;
-    return;
+  if (settingsSavePending) {
+    if (programmedMinutes == lastSavedMinutes) {
+      settingsSavePending = false;
+    } else if (millis() - encoderLastChangedAt >= EEPROM_SAVE_DELAY_MS) {
+      saveSettings();
+    }
   }
 
-  if (millis() - encoderLastChangedAt >= EEPROM_SAVE_DELAY_MS)
-    saveSettings();
+  if (brightnessSavePending) {
+    if (ledBrightness == lastSavedBrightness) {
+      brightnessSavePending = false;
+    } else if (millis() - brightnessLastChangedAt >= EEPROM_SAVE_DELAY_MS) {
+      saveSettings();
+    }
+  }
 }
 
 
@@ -371,6 +416,45 @@ void handleEncoder() {
   if (delta == 0)
     return;
 
+  // In brightness mode, the encoder adjusts brightness regardless
+  // of the timer state.
+  if (brightnessScreenActive) {
+    encoderTransitionAccumulator += delta;
+
+    while (encoderTransitionAccumulator >= 4) {
+      encoderTransitionAccumulator -= 4;
+
+      int newBrightness =
+        (int)ledBrightness + LED_BRIGHTNESS_STEP;
+
+      ledBrightness = constrain(
+        newBrightness,
+        MIN_LED_BRIGHTNESS,
+        MAX_LED_BRIGHTNESS
+      );
+
+      strip.setBrightness(ledBrightness);
+      scheduleBrightnessSave();
+    }
+
+    while (encoderTransitionAccumulator <= -4) {
+      encoderTransitionAccumulator += 4;
+
+      int newBrightness =
+        (int)ledBrightness - LED_BRIGHTNESS_STEP;
+
+      ledBrightness = constrain(
+        newBrightness,
+        MIN_LED_BRIGHTNESS,
+        MAX_LED_BRIGHTNESS
+      );
+
+      strip.setBrightness(ledBrightness);
+      scheduleBrightnessSave();
+    }
+
+    return;
+  }
 
   // Only allow duration adjustment while stopped
   if (timerState != TIMER_STOPPED) {
@@ -378,16 +462,12 @@ void handleEncoder() {
     return;
   }
 
-
   encoderTransitionAccumulator += delta;
-
 
   // Four transitions = one physical detent
   while (encoderTransitionAccumulator >= 4) {
-
     uint16_t previousMinutes = programmedMinutes;
     programmedMinutes += DURATION_STEP_MIN;
-
     encoderTransitionAccumulator -= 4;
 
     if (programmedMinutes > MAX_DURATION_MIN)
@@ -399,9 +479,7 @@ void handleEncoder() {
     resetTimer();
   }
 
-
   while (encoderTransitionAccumulator <= -4) {
-
     uint16_t previousMinutes = programmedMinutes;
 
     if (programmedMinutes > MIN_DURATION_MIN)
@@ -424,28 +502,47 @@ void handleEncoder() {
 bool lastEncoderButton = HIGH;
 
 void handleEncoderButton() {
-
   bool state = digitalRead(ENC_SW);
 
   if (state != lastEncoderButton) {
-
     delay(10);
-
     state = digitalRead(ENC_SW);
 
     if (state != lastEncoderButton) {
-
       lastEncoderButton = state;
 
-      if (state == LOW)
-        resetTimer();
-
-        resetFlashStarted = millis();
-        resetFlashActive = true;
+      if (state == LOW) {
+        encoderPressStarted = millis();
+        encoderHoldHandled = false;
+      } else {
+        // A normal click exits brightness mode. Otherwise it keeps
+        // the original "reset timer" button behavior.
+        if (brightnessScreenActive) {
+          brightnessScreenActive = false;
+          encoderTransitionAccumulator = 0;
+        } else if (!encoderHoldHandled) {
+          resetTimer();
+          resetFlashStarted = millis();
+          resetFlashActive = true;
+        }
+      }
     }
   }
-}
 
+  // Long press enters brightness adjustment.
+  if (
+    lastEncoderButton == LOW &&
+    !encoderHoldHandled &&
+    millis() - encoderPressStarted >= KNOB_HOLD_MS
+  ) {
+    brightnessScreenActive = true;
+    encoderHoldHandled = true;
+    encoderTransitionAccumulator = 0;
+
+    // Show the current brightness immediately.
+    strip.setBrightness(ledBrightness);
+  }
+}
 
 // ============================================================
 // PEDAL
@@ -579,6 +676,37 @@ void updateDisplay() {
 
   oled.clearBuffer();
 
+  if (brightnessScreenActive) {
+    oled.setFont(u8g2_font_6x10_tf);
+    oled.drawStr(0, 9, "LED BRIGHTNESS");
+
+    // 0..255 mapped to a 0..124 pixel bar.
+    const int barX = 2;
+    const int barY = 15;
+    const int barW = 124;
+    const int barH = 12;
+    int fillW = ((int)ledBrightness * (barW - 2)) / 255;
+
+    oled.drawFrame(barX, barY, barW, barH);
+
+    if (fillW > 0)
+      oled.drawBox(barX + 1, barY + 1, fillW, barH - 2);
+
+    char brightnessString[8];
+    snprintf(
+      brightnessString,
+      sizeof(brightnessString),
+      "%u%%",
+      (unsigned int)(((uint16_t)ledBrightness * 100U + 127U) / 255U)
+    );
+
+    oled.setFont(u8g2_font_6x10_tf);
+    oled.drawStr(0, 32, brightnessString);
+    oled.drawStr(82, 32, "CLICK");
+
+    oled.sendBuffer();
+    return;
+  }
 
   // --------------------------
   // STOPPED
@@ -705,6 +833,12 @@ void pulseLEDs(uint8_t red, uint8_t green, uint8_t blue) {
 
 
 void updateLEDs() {
+  // Brightness adjustment mode is a live LED preview.
+  if (brightnessScreenActive) {
+    strip.setBrightness(ledBrightness);
+    setAllLEDs(strip.Color(255, 255, 255));
+    return;
+  }
 
   // Three blue flashes confirm that a long hold reset the timer.
   if (resetFlashActive) {
@@ -831,7 +965,7 @@ void setup() {
   // --------------------------
 
   strip.begin();
-  strip.setBrightness(LED_BRIGHTNESS);
+  strip.setBrightness(DEFAULT_LED_BRIGHTNESS);
   strip.clear();
   strip.show();
 
@@ -850,7 +984,7 @@ void setup() {
   // --------------------------
 
   resetTimer();
-  
+
   resetFlashStarted = millis();
   resetFlashActive = true;
   pedalHoldHandled = true;
@@ -859,6 +993,10 @@ void setup() {
   Serial.print("Duration: ");
   Serial.print(programmedMinutes);
   Serial.println(" min");
+
+  Serial.print("LED brightness: ");
+  Serial.print(ledBrightness);
+  Serial.println(" / 255");
 
   Serial.println("Ready.");
 }
