@@ -977,6 +977,7 @@ void setup() {
   EEPROM.begin(EEPROM_SIZE);
 
   loadSettings();
+  strip.setBrightness(ledBrightness);
 
 
   // --------------------------
