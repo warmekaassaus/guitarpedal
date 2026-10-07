@@ -73,6 +73,8 @@
 #define MAX_DURATION_MIN       240
 #define DURATION_STEP_MIN      1
 
+#define WARNING_MIN            5
+
 #define PEDAL_HOLD_MS          1000
 #define KNOB_HOLD_MS           1000
 
@@ -921,7 +923,7 @@ void updateLEDs() {
   }
 
 
-  else if (remainingMs > 0) {
+  else if (remainingMs > (uint32_t)WARNING_MIN * 60UL * 1000UL) {
 
     // Green
     setAllLEDs(
@@ -930,10 +932,19 @@ void updateLEDs() {
   }
 
 
+  else if (remainingMs > 0) {
+
+    // Pulsing red = final minutes
+    pulseLEDs(255, 0, 0);
+  }
+
+
   else {
 
-    // Pulsing red = overtime
-    pulseLEDs(255, 0, 0);
+    // Solid red = overtime
+    setAllLEDs(
+      strip.Color(255, 0, 0)
+    );
   }
 }
 
