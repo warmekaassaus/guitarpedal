@@ -867,8 +867,25 @@ void setAllLEDs(uint32_t colour) {
 void pulseLEDs(uint8_t red, uint8_t green, uint8_t blue) {
   const unsigned long PULSE_PERIOD_MS = 3000;
 
-  float phase = (millis() % PULSE_PERIOD_MS) * 6.2831853f / PULSE_PERIOD_MS;
-  float pulse = (sinf(phase - 1.5707963f) + 1.0f) * 0.5f;
+  // A pulse starts at full brightness so it continues smoothly from
+  // whatever solid colour came before. It restarts when the colour
+  // changes or when pulsing resumes after a break (LEDs update every
+  // 20-25ms, so a longer gap means something else was showing).
+  static unsigned long pulseStarted = 0;
+  static unsigned long lastPulseAt = 0;
+  static uint32_t lastPulseColour = 0;
+
+  unsigned long now = millis();
+  uint32_t colour = strip.Color(red, green, blue);
+
+  if (now - lastPulseAt > 100 || colour != lastPulseColour)
+    pulseStarted = now;
+
+  lastPulseAt = now;
+  lastPulseColour = colour;
+
+  float phase = ((now - pulseStarted) % PULSE_PERIOD_MS) * 6.2831853f / PULSE_PERIOD_MS;
+  float pulse = (cosf(phase) + 1.0f) * 0.5f;
   uint8_t level = (uint8_t)(pulse * 255.0f + 0.5f);
 
   uint8_t pulsedRed = ((uint16_t)red * level) / 255;
